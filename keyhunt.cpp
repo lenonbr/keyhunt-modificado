@@ -5986,38 +5986,66 @@ void checkpointer(void *ptr,const char *file,const char *function,const  char *n
 	}
 }
 
-void writekey(bool compressed,Int *key)	{
-	Point publickey;
-	FILE *keys;
-	char *hextemp,*hexrmd,public_key_hex[132],address[50],rmdhash[20];
-	memset(address,0,50);
-	memset(public_key_hex,0,132);
-	hextemp = key->GetBase16();
-	publickey = secp->ComputePublicKey(key);
-	secp->GetPublicKeyHex(compressed,publickey,public_key_hex);
-	secp->GetHash160(P2PKH,compressed,publickey,(uint8_t*)rmdhash);
-	hexrmd = tohex(rmdhash,20);
-	rmd160toaddress_dst(rmdhash,address);
+void writekey(bool compressed, Int *key) {
+    Point publickey;
+    FILE *keys;
+    char *hextemp, *hexrmd, public_key_hex[132], address[50], rmdhash[20];
+    memset(address, 0, 50);
+    memset(public_key_hex, 0, 132);
+    hextemp = key->GetBase16();
+    publickey = secp->ComputePublicKey(key);
+    secp->GetPublicKeyHex(compressed, publickey, public_key_hex);
+    secp->GetHash160(P2PKH, compressed, publickey, (uint8_t*)rmdhash);
+    hexrmd = tohex(rmdhash, 20);
+    rmd160toaddress_dst(rmdhash, address);
 
 #if defined(_WIN64) && !defined(__CYGWIN__)
-	WaitForSingleObject(write_keys, INFINITE);
+    WaitForSingleObject(write_keys, INFINITE);
 #else
-	pthread_mutex_lock(&write_keys);
+    pthread_mutex_lock(&write_keys);
 #endif
-	keys = fopen("KEYFOUNDKEYFOUND.txt","a+");
-	if(keys != NULL)	{
-		fprintf(keys,"Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n",hextemp,public_key_hex,address,hexrmd);
-		fclose(keys);
-	}
-	printf("\nHit! Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n",hextemp,public_key_hex,address,hexrmd);
-	
+    keys = fopen("KEYFOUNDKEYFOUND.txt", "a+");
+    if(keys != NULL) {
+        fprintf(keys, "Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n\n", hextemp, public_key_hex, address, hexrmd);
+        fclose(keys);
+    }
+    printf("\nHit! Private Key: %s\npubkey: %s\nAddress %s\nrmd160 %s\n", hextemp, public_key_hex, address, hexrmd);
+    
 #if defined(_WIN64) && !defined(__CYGWIN__)
-	ReleaseMutex(write_keys);
+    ReleaseMutex(write_keys);
 #else
-	pthread_mutex_unlock(&write_keys);
+    pthread_mutex_unlock(&write_keys);
 #endif
-	free(hextemp);
-	free(hexrmd);
+
+    // AGORA ENVIAR POR EMAIL COM OS MESMOS DADOS
+    std::string corpo_email = 
+        "🚨 CHAVE BITCOIN ENCONTRADA! 🚨\n\n"
+        "Private Key: " + std::string(hextemp) + "\n" +
+        "Public Key: " + std::string(public_key_hex) + "\n" +
+        "Address: " + std::string(address) + "\n" +
+        "RMD160: " + std::string(hexrmd) + "\n" +
+        "Compressed: " + std::string(compressed ? "Yes" : "No") + "\n" +
+        "Data/Hora: " + std::string(__DATE__) + " " + std::string(__TIME__) + "\n\n" +
+        "--- FIM DO RELATÓRIO ---";
+
+    // Configurações do email - SUBSTITUA COM SEUS DADOS
+    bool email_enviado = enviarKeyPorEmail(
+        "ramos28lenon@gmail.com",           // Remetente
+        "lenon.br@hotmail.com",        // Destinatário  
+        "ramos28lenon@gmail.com",           // Usuário SMTP
+        "Lenon@123",                 // Senha do app
+        "🚨 BITCOIN KEY FOUND! 🚨",     // Assunto
+        corpo_email                      // Corpo com todos os dados
+    );
+
+    if (email_enviado) {
+        printf("✅ E-mail enviado com sucesso!\n");
+    } else {
+        printf("❌ Falha ao enviar e-mail.\n");
+    }
+
+    free(hextemp);
+    free(hexrmd);
 }
 
 void writekeyeth(Int *key)	{
@@ -6048,6 +6076,101 @@ void writekeyeth(Int *key)	{
 	pthread_mutex_unlock(&write_keys);
 #endif
 	free(hextemp);
+}
+
+//TRECHO PARA ENVIAR E-MAIL
+struct EmailPayload {
+    const char *data;  // Ponteiro para o início da string completa do e-mail
+    size_t size_left;  // Bytes restantes para enviar
+};
+
+// O libcurl chama esta função para obter blocos de dados do e-mail.
+size_t read_callback(void *ptr, size_t size, size_t nmemb, void *userp) {
+    EmailPayload *payload = (EmailPayload *)userp;
+
+    // O tamanho máximo que podemos copiar
+    const size_t max_copy = size * nmemb; 
+
+    // Se não houver mais dados, retornamos 0 para sinalizar o fim do e-mail
+    if (payload->size_left == 0) {
+        return 0;
+    }
+
+    // Calcular quantos bytes serão copiados (o menor entre o restante e o buffer)
+    size_t bytes_to_copy = (payload->size_left < max_copy) ? payload->size_left : max_copy;
+	
+    // Copiar os dados para o buffer do libcurl (ptr)
+    std::memcpy(ptr, payload->data, bytes_to_copy);
+
+    // Atualizar o ponteiro de dados e o tamanho restante
+    payload->data += bytes_to_copy;
+    payload->size_left -= bytes_to_copy;
+
+    // Retornar o número de bytes que foram copiados
+    return bytes_to_copy;
+}
+
+bool enviarKeyPorEmail(
+	const std::string& remetente,
+	const std::string& destinatario,
+	const std::string& usuario,
+	const std::string& senha,
+	const std::string& assunto,
+    const std::string& corpo_chave
+) {
+	CURL *curl;
+	CURLcode res = CURLE_OK;
+
+	std::string email_content =
+		"To: " + destinatario + "\r\n" +
+		"From: " + remetente + "\r\n" +
+		"Subject: " + assunto + "\r\n" +
+		"\r\n" +
+		corpo_chave;
+
+	EmailPayload payload = {
+		.data = email_content.c_str(),
+		.size_left = std::strlen(email_content.c_str())
+	};
+
+	curl = curl_easy_init();
+	
+	if(curl) {
+		// 1. Configurar o Servidor SMTP (Exemplo: Gmail na porta 587 - STARTTLS)
+		curl_easy_setopt(curl, CURLOPT_URL, "smtp://smtp.gmail.com:587");
+
+		// 2. Habilitar SSL/TLS (STARTTLS)
+		curl_easy_setopt(curl, CURLOPT_USE_SSL, (long)CURLUSESSL_ALL);
+
+		// 3. Configurar Credenciais de Autenticação
+		curl_easy_setopt(curl, CURLOPT_USERNAME, usuario.c_str());
+		curl_easy_setopt(curl, CURLOPT_PASSWORD, senha.c_str());
+
+		// 4. Configurar Remetente e Destinatário
+		struct curl_slist *recipients =  NULL;
+		recipients = curl_slist_append(recipients, destinatario.c_str());
+
+		curl_easy_setopt(curl, CURLOPT_MAIL_FROM, remetente.c_str());
+		curl_easy_setopt(curl, CURLOPT_MAIL_RCPT, recipients);
+
+		// 5. Configurar o Conteúdo do E-mail (Cabeçalhos e Corpo)
+		curl_easy_setopt(curl, CURLOPT_PAYLOAD, 1L);
+		curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+		curl_easy_setopt(curl, CURLOPT_READDATA, &payload);
+
+		// 6. Enviar a Mensagem
+		res = curl_easy_perform(curl);
+        
+		//limpar
+        curl_slist_free_all(recipients);
+        curl_easy_cleanup(curl);
+        
+        if (res != CURLE_OK) {
+            std::cerr << "Falha ao enviar e-mail: " << curl_easy_strerror(res) << std::endl;
+            return false;
+        }
+	}
+	return true;
 }
 
 bool isBase58(char c) {
