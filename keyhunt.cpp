@@ -27,6 +27,10 @@ email: albertobsd@gmail.com
 #include "hash/sha256.h"
 #include "hash/ripemd160.h"
 
+#include <curl/curl.h>
+#include <iostream>
+#include <cstring>
+
 #if defined(_WIN64) && !defined(__CYGWIN__)
 #include "getopt.h"
 #include <windows.h>
